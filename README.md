@@ -5,6 +5,8 @@ Een eenvoudige mindmaptool voor in de klas, bedoeld voor het smartboard.
 - Twee weergaven: **Rondom** (hoofdonderwerp in het midden) en **Links naar rechts**
 - **Presentatiemodus**: geen knoppen in beeld, takken stap voor stap onthullen door te tikken
 - Touchbediening: tik om te selecteren, sleep om te schuiven, knijp om te zoomen
+- Afbeeldingen bij knopen: plusje bij elke knoop (of Ctrl+V om een afbeelding te plakken); in de presentatiemodus tik je op een afbeelding om hem groot te zien
+- Inklappen verschuift niets: de overige knopen blijven op hun plek
 - Automatisch opslaan in de browser, meerdere mindmaps, export als PNG of JSON, back-up en import
 - Geen build nodig: gewone HTML, CSS en JavaScript
 

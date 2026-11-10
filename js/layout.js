@@ -12,8 +12,11 @@
     { fs: 17, fw: 400, wrap: 200, px: 10, py: 7 }
   ];
 
+  let IMGS = {};
   const vis = n => (n.col ? [] : n.ch);
-  const leaves = n => { const k = vis(n); return k.length ? k.reduce((a, c) => a + leaves(c), 0) : 1; };
+  // De indeling telt altijd alle knopen mee, ook ingeklapte takken. Zo blijft elke knoop op
+  // zijn plek als je een tak in- of uitklapt. Alleen het tekenen slaat verborgen knopen over.
+  const leaves = n => (n.ch.length ? n.ch.reduce((a, c) => a + leaves(c), 0) : 1);
 
   function wrapText(text, maxW, font) {
     ctx.font = font;
@@ -41,8 +44,20 @@
     n._fs = fs;
     n._lh = fs * 1.25;
     n._d = d;
-    n._w = Math.ceil(mw + 2 * z.px * s);
-    n._h = Math.ceil(lines.length * n._lh + 2 * z.py * s);
+    const th = lines.length * n._lh;
+    // afbeelding boven de tekst
+    const im = n.img && IMGS[n.img];
+    let iw = 0, ih = 0, gap = 0;
+    if (im && im.w && im.h) {
+      const k = Math.min(150 * s / im.w, 120 * s / im.h);
+      iw = Math.round(im.w * k); ih = Math.round(im.h * k); gap = 6 * s;
+    }
+    const ch = ih + gap + th;
+    n._iw = iw; n._ih = ih;
+    n._ioff = iw ? -ch / 2 : 0;
+    n._toff = iw ? (-ch / 2 + ih + gap + th / 2) : 0;
+    n._w = Math.ceil(Math.max(mw + 2 * z.px * s, iw ? iw + 16 * s : 0));
+    n._h = Math.ceil(ch + 2 * z.py * s);
   }
 
   function lr(root, s) {
@@ -51,7 +66,7 @@
     (function place(n, d, x) {
       measure(n, d, s);
       n._cx = x + n._w / 2;
-      const k = vis(n);
+      const k = n.ch;
       if (!k.length) { n._cy = y + n._h / 2; y += n._h + gapY; }
       else {
         k.forEach(c => place(c, d + 1, x + n._w + gapX));
@@ -65,7 +80,7 @@
     (function m(n, d) {
       measure(n, d, s);
       (levels[d] = levels[d] || []).push(n);
-      vis(n).forEach(c => m(c, d + 1));
+      n.ch.forEach(c => m(c, d + 1));
     })(root, 0);
     root._w = Math.ceil(root._w * 1.35);
     root._h = Math.ceil(root._h * 1.55);
@@ -73,7 +88,7 @@
     // hoeken: elke tak krijgt een stuk van de cirkel, naar aantal knopen onderin
     (function p(n, d, a0, a1) {
       n._ang = (a0 + a1) / 2;
-      const k = vis(n);
+      const k = n.ch;
       if (!k.length) return;
       const tot = k.reduce((q, c) => q + leaves(c), 0);
       let st = d === 0 ? -Math.PI / 2 : a0;
@@ -114,7 +129,8 @@
     }
   }
 
-  function run(root, mode, scale) {
+  function run(root, mode, scale, imgs) {
+    IMGS = imgs || {};
     if (mode === 'lr') lr(root, scale); else radial(root, scale);
     let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
     (function b(n) {
@@ -122,7 +138,7 @@
       maxX = Math.max(maxX, n._cx + n._w / 2 + 30);
       minY = Math.min(minY, n._cy - n._h / 2 - 30);
       maxY = Math.max(maxY, n._cy + n._h / 2 + 30);
-      vis(n).forEach(b);
+      n.ch.forEach(b);
     })(root);
     return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
   }

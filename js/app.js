@@ -35,14 +35,26 @@
   }
   function walk(n, fn, d) { d = d || 0; fn(n, d); n.ch.forEach(c => walk(c, fn, d + 1)); }
   function count(n) { return n.ch.reduce((a, c) => a + 1 + count(c), 0); }
-  function normalize(n) {
-    return {
+  // maakt een schone kopie van een boom (nieuwe id's); afbeeldingen worden uit src naar out gekopieerd
+  function normalize(n, src, out) {
+    const o = {
       id: Store.uid(),
       t: String(n && n.t != null ? n.t : '').slice(0, 300),
       c: COL[n && n.c] ? n.c : 'blue',
       col: !!(n && n.col),
-      ch: Array.isArray(n && n.ch) ? n.ch.map(normalize) : []
+      ch: Array.isArray(n && n.ch) ? n.ch.map(c => normalize(c, src, out)) : []
     };
+    const im = n && n.img && src && src[n.img];
+    if (im && typeof im.src === 'string' && im.src.indexOf('data:image/') === 0 && im.w > 0 && im.h > 0) {
+      out[n.img] = { src: im.src, w: im.w, h: im.h };
+      o.img = n.img;
+    }
+    return o;
+  }
+  function cleanMap(m, title) {
+    const imgs = {};
+    const root = normalize(m.root, m.images || {}, imgs);
+    return { id: Store.uid(), title: String(title || m.title || 'Mindmap').slice(0, 120), layout: m.layout === 'lr' ? 'lr' : 'radial', updated: Date.now(), root, images: imgs };
   }
 
   /* ---------- ongedaan maken ---------- */
@@ -77,8 +89,24 @@
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 
   function anchor(n, tx, ty, rad) {
-    if (rad && n._d >= 2) return [clamp(tx, n._cx - n._w / 2, n._cx + n._w / 2), n._cy + n._h / 2 - 3];
+    if (rad && n._d >= 2) {
+      const x = clamp(tx, n._cx - n._w / 2, n._cx + n._w / 2);
+      if (n._iw && ty < n._cy) return [x, n._cy - n._h / 2 + 2];
+      return [x, n._cy + n._h / 2 - 3];
+    }
     return [n._cx, n._cy];
+  }
+
+  // plek van het plusje: de hoek van de knoop die het verst van het in-/uitklaprondje ligt
+  function plusPos(n, tog) {
+    const hw = n._w / 2 + 2, hh = n._h / 2 + 2;
+    let best = null, bs = -1;
+    [[1, -1], [-1, -1], [1, 1], [-1, 1]].forEach(c => {
+      const x = n._cx + c[0] * hw, y = n._cy + c[1] * hh;
+      const m = tog ? Math.hypot(x - tog[0], y - tog[1]) : 1e9;
+      if (m > bs) { bs = m; best = [x, y]; }
+    });
+    return best;
   }
 
   function taper(p, c) {
@@ -103,8 +131,16 @@
     return '<path d="M' + L.join('L') + 'L' + R.reverse().join('L') + 'Z" fill="' + COL[c.c].m + '"/>';
   }
 
+  function imgMarkup(n, col) {
+    const im = n.img && map.images[n.img];
+    if (!im || !n._iw) return '';
+    const x = n._cx - n._iw / 2, y = n._cy + n._ioff;
+    return '<rect x="' + (x - 3) + '" y="' + (y - 3) + '" width="' + (n._iw + 6) + '" height="' + (n._ih + 6) + '" rx="9" fill="#fff" stroke="' + col.m + '" stroke-width="1.5"/>' +
+      '<image href="' + im.src + '" x="' + x + '" y="' + y + '" width="' + n._iw + '" height="' + n._ih + '" preserveAspectRatio="xMidYMid slice"/>';
+  }
+
   function textLines(n, fill, weight) {
-    const y0 = n._cy - (n._lines.length - 1) * n._lh / 2;
+    const y0 = n._cy + (n._toff || 0) - (n._lines.length - 1) * n._lh / 2;
     return '<text text-anchor="middle" dominant-baseline="central" font-size="' + n._fs.toFixed(1) + '" font-weight="' + weight + '" fill="' + fill + '">' +
       n._lines.map((l, i) => '<tspan x="' + n._cx.toFixed(1) + '" y="' + (y0 + i * n._lh).toFixed(1) + '">' + esc(l) + '</tspan>').join('') + '</text>';
   }
@@ -146,19 +182,30 @@
         else shape = '<rect x="' + x + '" y="' + y + '" width="' + n._w + '" height="' + n._h + '" rx="12" fill="' + col.l + '" stroke="' + col.m + '" stroke-width="2"/>' + textLines(n, col.t, 400);
         if (isSel) g += '<rect x="' + (x - 6) + '" y="' + (y - 6) + '" width="' + (n._w + 12) + '" height="' + (n._h + 12) + '" rx="' + (r + 6) + '" fill="none" stroke="#378ADD" stroke-width="3" stroke-dasharray="7 5"/>';
       }
-      g += shape + '</g>';
+      g += shape + imgMarkup(n, col) + '</g>';
       Nn.push(g);
 
+      let tog = null;
       if (n.ch.length && !(rad && d === 0)) {
         let tx, ty;
         if (rad) {
           const off = Math.abs(Math.cos(n._ang)) * n._w / 2 + Math.abs(Math.sin(n._ang)) * n._h / 2 + 16;
           tx = n._cx + Math.cos(n._ang) * off; ty = n._cy + Math.sin(n._ang) * off;
         } else { tx = n._cx + n._w / 2; ty = n._cy; }
+        tog = [tx, ty];
         const label = n.col ? count(n) : '−';
         Nn.push('<g data-id="' + n.id + '" data-tog="1"><circle cx="' + tx.toFixed(1) + '" cy="' + ty.toFixed(1) + '" r="24" fill="transparent"/>' +
           '<circle cx="' + tx.toFixed(1) + '" cy="' + ty.toFixed(1) + '" r="15" fill="#fff" stroke="' + col.m + '" stroke-width="2.5"/>' +
           '<text x="' + tx.toFixed(1) + '" y="' + ty.toFixed(1) + '" text-anchor="middle" dominant-baseline="central" font-size="15" font-weight="500" fill="' + col.t + '">' + label + '</text></g>');
+      }
+
+      // plusje om een afbeelding toe te voegen (alleen in bewerkmodus, alleen als er nog geen afbeelding is)
+      if (!present && !opts.noUI && !n.img) {
+        const pp = plusPos(n, tog);
+        const px = pp[0].toFixed(1), py = pp[1].toFixed(1);
+        Nn.push('<g data-id="' + n.id + '" data-add="1"><circle cx="' + px + '" cy="' + py + '" r="22" fill="transparent"/>' +
+          '<circle cx="' + px + '" cy="' + py + '" r="12" fill="#fff" stroke="#888780" stroke-width="2"/>' +
+          '<path d="M' + (pp[0] - 5).toFixed(1) + ' ' + py + 'H' + (pp[0] + 5).toFixed(1) + 'M' + px + ' ' + (pp[1] - 5).toFixed(1) + 'V' + (pp[1] + 5).toFixed(1) + '" stroke="#5F5E5A" stroke-width="2.4" stroke-linecap="round" fill="none"/></g>');
       }
     })(map.root, null);
 
@@ -166,7 +213,7 @@
   }
 
   function relayout() {
-    bounds = Layout.run(map.root, map.layout, scale());
+    bounds = Layout.run(map.root, map.layout, scale(), map.images);
     const o = build();
     layerL.innerHTML = o.l;
     layerN.innerHTML = o.n;
@@ -284,7 +331,12 @@
     const r = find(g.dataset.id);
     if (!r) return;
     if (g.dataset.tog) { r.n.col = !r.n.col; changed(); ensureInView(); return; }
-    if (present) { if (r.n.ch.length) { r.n.col = !r.n.col; changed(); ensureInView(); } return; }
+    if (g.dataset.add) { sel = r.n.id; relayout(); bar(); pickImage(r.n.id); return; }
+    if (present) {
+      if (e.target.tagName && e.target.tagName.toLowerCase() === 'image' && r.n.img && map.images[r.n.img]) { showLightbox(map.images[r.n.img].src); return; }
+      if (r.n.ch.length) { r.n.col = !r.n.col; changed(); ensureInView(); }
+      return;
+    }
     sel = r.n.id; relayout(); bar();
   }
 
@@ -332,6 +384,80 @@
     walk(map.root, n => { if (n.ch.length) n.col = collapsed; });
     changed(); fit();
   }
+  /* ---------- afbeeldingen ---------- */
+  let imgTarget = null;
+  const fileEl = document.createElement('input');
+  fileEl.type = 'file'; fileEl.accept = 'image/*'; fileEl.hidden = true;
+  document.body.appendChild(fileEl);
+  fileEl.addEventListener('change', () => {
+    const f = fileEl.files[0]; fileEl.value = '';
+    if (f && imgTarget) attachFile(imgTarget, f);
+  });
+  function pickImage(id) { imgTarget = id; fileEl.click(); }
+
+  // verkleint de afbeelding zodat de opslag in de browser niet vol loopt
+  function processImage(file, cb) {
+    const rd = new FileReader();
+    rd.onload = () => {
+      const im = new Image();
+      im.onload = () => {
+        let w = im.naturalWidth || 300, h = im.naturalHeight || 300;
+        const k = Math.min(1, 360 / Math.max(w, h));
+        w = Math.max(1, Math.round(w * k)); h = Math.max(1, Math.round(h * k));
+        const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+        const c = cv.getContext('2d');
+        c.drawImage(im, 0, 0, w, h);
+        let src = /png|gif|webp|svg/.test(file.type) ? cv.toDataURL('image/png') : '';
+        if (!src || src.length > 120000) {
+          c.globalCompositeOperation = 'destination-over'; c.fillStyle = '#fff'; c.fillRect(0, 0, w, h);
+          src = cv.toDataURL('image/jpeg', 0.82);
+        }
+        cb(src, w, h);
+      };
+      im.onerror = () => alert('Deze afbeelding kon niet worden gelezen.');
+      im.src = rd.result;
+    };
+    rd.readAsDataURL(file);
+  }
+
+  function attachFile(id, file) {
+    if (!/^image\//.test(file.type)) { alert('Kies een afbeelding.'); return; }
+    processImage(file, (src, w, h) => {
+      const r = find(id); if (!r) return;
+      snapshot();
+      const key = Store.uid();
+      map.images[key] = { src, w, h };
+      r.n.img = key; sel = id;
+      changed(); bar(); reveal(find(id).n);
+    });
+  }
+
+  function removeImage() {
+    const r = find(sel); if (!r || !r.n.img) return;
+    snapshot(); delete r.n.img; changed(); bar();
+  }
+
+  function pruneImages(m) {
+    const used = {};
+    walk(m.root, n => { if (n.img) used[n.img] = 1; });
+    Object.keys(m.images).forEach(k => { if (!used[k]) delete m.images[k]; });
+  }
+
+  document.addEventListener('paste', e => {
+    if (present || !sel) return;
+    const items = (e.clipboardData && e.clipboardData.items) || [];
+    for (const it of items) {
+      if (it.kind === 'file' && /^image\//.test(it.type)) {
+        const f = it.getAsFile();
+        if (f) { e.preventDefault(); attachFile(sel, f); return; }
+      }
+    }
+  });
+
+  const lightbox = $('#lightbox');
+  function showLightbox(src) { lightbox.querySelector('img').src = src; lightbox.hidden = false; }
+  lightbox.addEventListener('click', () => { lightbox.hidden = true; });
+
   function focusName() {
     const i = $('#name'); if (i) { i.focus(); i.select(); }
   }
@@ -349,6 +475,9 @@
       '<button data-act="child"><i class="ti ti-plus"></i> Kindknoop</button>' +
       (r.p ? '<button data-act="sib"><i class="ti ti-arrow-down-right"></i> Zusje</button>' : '') +
       (n.ch.length ? '<button data-act="tog" title="Tak in- of uitklappen"><i class="ti ti-' + (n.col ? 'arrows-maximize' : 'arrows-minimize') + '"></i></button>' : '') +
+      (n.img
+        ? '<button data-act="imgchg" title="Andere afbeelding kiezen"><i class="ti ti-photo-edit"></i> Vervangen</button><button data-act="imgdel" class="danger" title="Afbeelding wissen"><i class="ti ti-photo-off"></i></button>'
+        : '<button data-act="imgadd" title="Afbeelding toevoegen (of plak met Ctrl+V)"><i class="ti ti-photo-plus"></i> Afbeelding</button>') +
       '<span class="sep"></span>' +
       Object.keys(COL).map(c => '<button class="sw' + (n.c === c ? ' on' : '') + '" data-act="col" data-c="' + c + '" style="background:' + COL[c].m + '" aria-label="Kleur ' + c + '"></button>').join('') +
       (r.p ? '<span class="sep"></span><button data-act="del" class="danger" title="Verwijderen"><i class="ti ti-trash"></i></button>' : '');
@@ -360,6 +489,8 @@
     if (a === 'child') addChild();
     else if (a === 'sib') addSibling();
     else if (a === 'tog') toggleSel();
+    else if (a === 'imgadd' || a === 'imgchg') pickImage(sel);
+    else if (a === 'imgdel') removeImage();
     else if (a === 'col') setColor(b.dataset.c);
     else if (a === 'del') removeSel();
   });
@@ -384,6 +515,7 @@
     const tag = (document.activeElement && document.activeElement.tagName) || '';
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && tag !== 'INPUT') { e.preventDefault(); undo(); return; }
     if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z')) && tag !== 'INPUT') { e.preventDefault(); redo(); return; }
+    if (e.key === 'Escape' && !lightbox.hidden) { lightbox.hidden = true; return; }
     if (e.key === 'Escape' && present) { setPresent(false); return; }
     if (tag === 'INPUT' || tag === 'TEXTAREA' || $('#dlg-maps').open) return;
     if (present || !sel) return;
@@ -459,7 +591,7 @@
     download(safeName(map.title) + '.mindmap.json', new Blob([Store.stringify({ app: 'mindmap', version: 1, map })], { type: 'application/json' }));
   }
   function exportPNG() {
-    const b = bounds, o = build({ noSel: true });
+    const b = bounds, o = build({ noSel: true, noUI: true });
     const pad = 30, w = b.w + pad * 2, h = b.h + pad * 2;
     let k = 2; if (Math.max(w, h) * k > 6000) k = 6000 / Math.max(w, h);
     const src = '<svg xmlns="http://www.w3.org/2000/svg" width="' + Math.round(w * k) + '" height="' + Math.round(h * k) + '" viewBox="' + (b.minX - pad) + ' ' + (b.minY - pad) + ' ' + w + ' ' + h + '" font-family=\'' + Layout.FONT.replace(/'/g, '') + '\'>' +
@@ -482,6 +614,8 @@
   function openMap(id) {
     const m = data.maps.find(x => x.id === id); if (!m) return;
     map = m; data.current = id; sel = null; undoS = []; redoS = [];
+    if (!map.images) map.images = {};
+    pruneImages(map);
     Store.save(); syncTop(); relayout(); bar(); fit();
   }
 
@@ -508,8 +642,7 @@
     const m = data.maps.find(x => x.id === id);
     if (a === 'open') { openMap(id); dlg.close(); }
     else if (a === 'dup') {
-      const c = JSON.parse(Store.stringify(m)); c.id = Store.uid(); c.title = (m.title || 'Mindmap') + ' (kopie)'; c.root = normalize(c.root); c.updated = Date.now();
-      data.maps.push(c); Store.saveNow(); renderList();
+      data.maps.push(cleanMap(m, (m.title || 'Mindmap') + ' (kopie)')); Store.saveNow(); renderList();
     } else if (a === 'del') {
       if (!confirm('"' + (m.title || 'Zonder titel') + '" verwijderen? Dit kan niet ongedaan worden gemaakt.')) return;
       data.maps = data.maps.filter(x => x.id !== id);
@@ -520,7 +653,7 @@
   });
 
   $('#btn-new').addEventListener('click', () => {
-    const m = { id: Store.uid(), title: 'Nieuwe mindmap', layout: 'radial', updated: Date.now(), root: Store.N('Hoofdonderwerp', 'purple', []) };
+    const m = { id: Store.uid(), title: 'Nieuwe mindmap', layout: 'radial', updated: Date.now(), root: Store.N('Hoofdonderwerp', 'purple', []), images: {} };
     data.maps.push(m); Store.saveNow(); dlg.close(); openMap(m.id);
     sel = m.root.id; relayout(); bar(); focusName();
   });
@@ -537,7 +670,7 @@
         let last = null;
         list.forEach(m => {
           if (!m || !m.root) return;
-          last = { id: Store.uid(), title: String(m.title || 'Geimporteerd').slice(0, 120), layout: m.layout === 'lr' ? 'lr' : 'radial', updated: Date.now(), root: normalize(m.root) };
+          last = cleanMap(m, m.title || 'Geimporteerd');
           data.maps.push(last);
         });
         if (!last) throw new Error('geen mindmap');
@@ -556,6 +689,12 @@
   window.addEventListener('beforeunload', () => Store.saveNow());
 
   /* ---------- start ---------- */
+  data.maps.forEach(m => { if (!m.images) m.images = {}; pruneImages(m); });
+  let warned = false;
+  Store.onError = () => {
+    if (warned) return; warned = true;
+    alert('Opslaan in de browser lukt niet meer, de opslag is vol. Maak een back-up van je mindmaps en verwijder afbeeldingen of oude mindmaps.');
+  };
   syncTop();
   relayout();
   bar();

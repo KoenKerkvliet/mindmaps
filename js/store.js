@@ -13,6 +13,7 @@
       title: 'Waterkringloop',
       layout: 'radial',
       updated: Date.now(),
+      images: {},
       root: N('Waterkringloop', 'purple', [
         N('Verdamping', 'blue', [N('De zon verwarmt het water', 'blue'), N('Waterdamp stijgt op', 'blue')]),
         N('Condensatie', 'teal', [N('Wolken ontstaan', 'teal')]),
@@ -49,7 +50,10 @@
 
     saveNow() {
       clearTimeout(timer);
-      try { localStorage.setItem(KEY, JSON.stringify(this.data, replacer)); } catch (e) { console.warn('Opslaan mislukt', e); }
+      try { localStorage.setItem(KEY, JSON.stringify(this.data, replacer)); } catch (e) {
+        console.warn('Opslaan mislukt', e);
+        if (this.onError) this.onError(e);
+      }
     },
 
     stringify(obj) { return JSON.stringify(obj, replacer); }
